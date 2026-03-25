@@ -49,6 +49,10 @@ _ADJECTIVES = frozenset({"JJ", "JJR", "JJS"})
 # POS patterns that signal a dangling fragment opener
 _BAD_LEAD_POS = frozenset({"IN", "CC", "RB"})
 
+# Known nouns that NLTK sometimes mis-tags as verbs
+_NOUN_LEXICON = {n.lower() for n in nouns}
+_NOUN_LEXICON.add("suite")
+
 # ─────────────────────────────
 # Pre-compiled regex patterns
 # ─────────────────────────────
@@ -140,9 +144,9 @@ def build_models():
         seed1_text = clean(f.read())
 
     model1 = markovify.NewlineText(seed1_text, state_size=3)
-    seed2_text = make_seed_sentences(500)
+    seed2_text = make_seed_sentences(2000)
     model2 = markovify.NewlineText(clean(seed2_text), state_size=3)
-    seed3_text = make_short_seed_sentences(500)
+    seed3_text = make_short_seed_sentences(4000)
     model3 = markovify.NewlineText(clean(seed3_text), state_size=3)
     combined = markovify.combine([model1, model2, model3], [0.70, 0.10, 0.20])
 
@@ -306,13 +310,26 @@ def good_enhanced(s: str) -> tuple[bool, str | None]:
 # ─────────────────────────────
 # Scoring function
 # ─────────────────────────────
-def _score(s: str, seed_words: set, target_noun: str) -> float:
+def _content_word_set(text: str) -> set[str]:
+    words = []
+    for w in text.lower().split():
+        w = w.strip(string.punctuation)
+        if w and w not in _STOPWORDS:
+            words.append(w)
+    return set(words)
+
+def _score(
+    s: str,
+    seed_words: set,
+    target_noun: str,
+    reference_words: set | None = None,
+) -> float:
     s_lower = s.lower()
     wds = s_lower.split()
     n = len(wds)
 
     seed_score = len(set(wds) & seed_words) * 2.0
-    content_words = [w for w in wds if w not in _STOPWORDS]
+    content_words = [w.strip(string.punctuation) for w in wds if w.strip(string.punctuation) not in _STOPWORDS]
     richness = len(set(content_words)) / max(len(content_words), 1)
     noun_bonus = 3.0 if target_noun and target_noun in s_lower else -2.0
     length_penalty = 1.0 / (1.0 + abs(n - 10) * 0.4)
@@ -324,6 +341,11 @@ def _score(s: str, seed_words: set, target_noun: str) -> float:
 
     _, grammar_bonus = _pos_validate(s)
 
+    reference_bonus = 0.0
+    if reference_words:
+        overlap = set(content_words) & reference_words
+        reference_bonus = len(overlap) * 1.8
+
     return (
         seed_score
         + richness * 2.0
@@ -331,12 +353,13 @@ def _score(s: str, seed_words: set, target_noun: str) -> float:
         + length_penalty
         + opener_penalty
         + grammar_bonus
+        + reference_bonus
     )
 
 # ─────────────────────────────
 # Thread-safe single-attempt generators
 # ─────────────────────────────
-def _try_seeded(seed_word: str, tries: int = 8) -> list[str]:
+def _try_seeded(seed_word: str, tries: int = 8, reference_words: set | None = None) -> list[str]:
     """Try to make sentences starting with seed_word; returns valid candidates."""
     results = []
     for _ in range(tries):
@@ -373,11 +396,13 @@ def generate_best(
     seed: str,
     noun: str = "",
     adj: str = "",
-    n_candidates: int = 25,
+    context_text: str = "",
+    n_candidates: int = 60,
     workers: int = 4,
 ) -> str:
     candidates: list[str] = []
-    seed_words = set(seed.lower().split())
+    seed_words = _content_word_set(seed)
+    context_words = _content_word_set(context_text)
     words_priority = [w for w in (noun + " " + adj).lower().split() if len(w) > 3]
     target_noun = noun.lower()
 
@@ -401,12 +426,12 @@ def generate_best(
         for fut in as_completed(futures):
             candidates.extend(fut.result())
 
-    # Phase 3: RapidFuzz de-duplication
+    # Phase 3: rapidfuzz de-duplication
     candidates = rapidfuzz_filter(candidates, threshold=70)
 
     # Phase 4: score and select
     if candidates:
-        best = max(candidates, key=lambda s: _score(s, seed_words, target_noun))
+        best = max(candidates, key=lambda s: _score(s, seed_words, target_noun, context_words))
         best = _RE_MULTI_SPACE.sub(" ", best)
         best = _RE_REPEATED_WORD.sub(r"\1", best)
         best = best.strip()
@@ -425,7 +450,8 @@ def generate_best(
 def replace_till_verb(sent1: str, sent2: str, pronoun: str = "It") -> str:
     """
     Replace the opening noun-phrase-like part of sent2 with a pronoun.
-    Returns the modified sent2 only.
+    Keeps POS tagging, but avoids cutting on gerunds/participles used as modifiers.
+    Also uses a verb lexicon to catch mis-tagged verbs.
     """
     print("\n--- CALL ---")
     print("sent1:", sent1)
@@ -439,16 +465,15 @@ def replace_till_verb(sent1: str, sent2: str, pronoun: str = "It") -> str:
         print("empty sent2")
         return sent2
 
-    # Normalize for prefix comparison
     def _norm(w: str) -> str:
         return w.strip(string.punctuation).lower()
 
+    # Shared prefix length
     prefix_len = 0
     for a, b in zip(words1, words2):
         if _norm(a) != _norm(b):
             break
         prefix_len += 1
-
     print("shared prefix len:", prefix_len)
 
     tags = []
@@ -465,6 +490,7 @@ def replace_till_verb(sent1: str, sent2: str, pronoun: str = "It") -> str:
         for w, t in tags:
             print(f"{w:15} {t}")
 
+    # POS sets
     NOUNS = {"NN", "NNS", "NNP", "NNPS"}
     ADJ = {"JJ", "JJR", "JJS"}
     DET = {"DT", "PRP$", "POS"}
@@ -472,26 +498,45 @@ def replace_till_verb(sent1: str, sent2: str, pronoun: str = "It") -> str:
     PRON = {"PRP"}
     VERBS = {"VB", "VBD", "VBG", "VBN", "VBP", "VBZ", "MD"}
     ADV = {"RB", "RBR", "RBS"}
+
     CONNECT_WORDS = {
         "that", "which", "who", "whom", "where", "when", "why", "how",
-        "because", "since", "although", "unless", "until", "while", "if", "as", "before", "after"
+        "because", "since", "although", "unless", "until", "while", "if",
+        "as", "before", "after"
     }
+
+    # Override lexicons (replace with your actual nouns and verbs lists)
+    _NOUN_LEXICON = {n.lower() for n in nouns}
+    _NOUN_LEXICON.add("suite")  # special cases
+    _VERB_LEXICON = {v.lower() for v in verbs}
+
+    def is_nounish_token(word: str, tag: str) -> bool:
+        w = _norm(word)
+        if tag in NOUNS or tag in ADJ or tag in DET or tag in ADV or tag in PRON:
+            return True
+        if w in _NOUN_LEXICON:
+            return True
+        return False
 
     cut_index = 0
     if tags:
         print("\nScanning tags...")
-
         seen_nounish = False
+
         for i, (word, tag) in enumerate(tags):
-            word_norm = word.lower().strip(string.punctuation)
+            word_norm = _norm(word)
+            next_tag = tags[i + 1][1] if i + 1 < len(tags) else ""
+            next_word = _norm(tags[i + 1][0]) if i + 1 < len(tags) else ""
+
             print(f"i={i}  word={word}  tag={tag}")
 
-            if tag in NOUNS or tag in ADJ or tag in DET or tag in ADV or tag in PRON:
+            # Normal noun-phrase material
+            if is_nounish_token(word, tag):
                 seen_nounish = True
                 print("allowed noun-phrase tag")
                 continue
 
-            # If we hit a connector after some noun phrase, cut *after* it
+            # Connectors
             if word_norm in CONNECT_WORDS or tag in CONNECT:
                 print("connector found")
                 if seen_nounish or i >= 2:
@@ -499,19 +544,33 @@ def replace_till_verb(sent1: str, sent2: str, pronoun: str = "It") -> str:
                     break
                 continue
 
-            # First real verb after some opener -> cut here
-            if tag in VERBS:
-                print("FOUND VERB at", i)
-                if seen_nounish or prefix_len > 0 or i >= 2:
-                    cut_index = i
-                break
+            # Participles used as adjectives
+            if tag in {"VBG", "VBN"} and (
+                next_tag in NOUNS or next_tag in ADJ or next_word in _NOUN_LEXICON
+            ):
+                print("participial modifier before noun → keep scanning")
+                seen_nounish = True
+                continue
 
-            # Anything else stops replacement
+            # Real verb boundary
+            if tag in VERBS or word_norm in _VERB_LEXICON:
+                if word_norm in _NOUN_LEXICON:
+                    print("verb-tagged but known noun → keep scanning")
+                    seen_nounish = True
+                    continue
+
+                if seen_nounish or prefix_len > 0 or i >= 2:
+                    print("FOUND VERB at", i)
+                    cut_index = i
+                    break
+
+                print("leading verb-like token ignored")
+                continue
+
             print("NOT ALLOWED → stop replacement")
             cut_index = 0
             break
 
-    # Fallback if POS didn't help: use common prefix if it looks meaningful
     if cut_index == 0 and prefix_len >= 2 and prefix_len < len(words2):
         cut_index = prefix_len
 
@@ -541,19 +600,17 @@ def get_description(adj, noun, verb, twist):
     seed = f"{adj} {noun} {verb} {twist}".strip()
     sent1 = generate_best(seed, noun=noun, adj=adj)
 
-    # Make sure sent2 is not identical or too similar to sent1
+    # Sentence 2 should be rewarded for overlapping both the idea seed and sent1
     sent2 = ""
     for _ in range(6):
-        candidate = generate_best(seed, noun=noun, adj=adj)
+        candidate = generate_best(seed, noun=noun, adj=adj, context_text=sent1)
         if fuzz.ratio(sent1.lower(), candidate.lower()) < 88:
             sent2 = candidate
             break
         sent2 = candidate
 
-    # Replace repeated opening phrase in sent2
     sent2 = replace_till_verb(sent1, sent2, pronoun="It")
 
-    # Return both sentences
     return sent1 + " " + sent2
 
 # ─────────────────────────────
