@@ -18,45 +18,53 @@ try:
     import nltk
     from nltk import pos_tag, word_tokenize
 
-    for _res, _kind in [
-        ("averaged_perceptron_tagger", "taggers"),
-        ("punkt_tab", "tokenizers"),
-    ]:
-        try:
-            nltk.data.find(f"{_kind}/{_res}")
-        except LookupError:
-            nltk.download(_res, quiet=True)
+    def _ensure_nltk():
+        resources = [
+            "taggers/averaged_perceptron_tagger_eng",
+            "taggers/averaged_perceptron_tagger",
+            "tokenizers/punkt",
+            "tokenizers/punkt_tab",
+        ]
+        for r in resources:
+            try:
+                nltk.data.find(r)
+            except LookupError:
+                name = r.split("/")[-1]
+                print("[NLTK] downloading", name)
+                nltk.download(name, quiet=True)
 
+    _ensure_nltk()
     _POS_AVAILABLE = True
+
 except ImportError:
     _POS_AVAILABLE = False
 
 # ─────────────────────────────
 # POS grammar constants
 # ─────────────────────────────
-_NOUNS      = frozenset({"NN", "NNS", "NNP", "NNPS"})
-_VERBS      = frozenset({"VB", "VBD", "VBG", "VBN", "VBP", "VBZ", "MD"})
+_NOUNS = frozenset({"NN", "NNS", "NNP", "NNPS"})
+_VERBS = frozenset({"VB", "VBD", "VBG", "VBN", "VBP", "VBZ", "MD"})
 _ADJECTIVES = frozenset({"JJ", "JJR", "JJS"})
 
 # POS patterns that signal a dangling fragment opener
-_BAD_LEAD_POS = frozenset({"IN", "CC", "RB"})  # subordinating conj, coord conj, adverb-opener
+_BAD_LEAD_POS = frozenset({"IN", "CC", "RB"})
 
 # ─────────────────────────────
 # Pre-compiled regex patterns
 # ─────────────────────────────
-_RE_MULTI_SPACE   = re.compile(r"\s{2,}")
+_RE_MULTI_SPACE = re.compile(r"\s{2,}")
 _RE_REPEATED_WORD = re.compile(r"\b(\w+) \1\b", re.IGNORECASE)
 _RE_TRAILING_PUNC = re.compile(r"[.!?]$")
 
 # ─────────────────────────────
 # Paths
 # ─────────────────────────────
-BASE_DIR   = os.path.dirname(__file__)
+BASE_DIR = os.path.dirname(__file__)
 MODEL_PATH = os.path.join(BASE_DIR, "model.json")
-HASH_PATH  = os.path.join(BASE_DIR, "model.hash")
-SEED_PATH  = os.path.join(BASE_DIR, "seed_text.py")
+HASH_PATH = os.path.join(BASE_DIR, "model.hash")
+SEED_PATH = os.path.join(BASE_DIR, "seed_text.py")
 
-_STARTWORDS = frozenset("a the to until ")
+_STARTWORDS = frozenset("a the to until".split())
 
 _STOPWORDS = frozenset(
     "a an the and or but in on at to for of with that this is are was were "
@@ -85,7 +93,6 @@ def clean(text: str) -> str:
     allowed = set(string.ascii_letters + string.digits + " .!?\n,;:-'")
     return "".join(c if c in allowed else " " for c in text).lower()
 
-
 # ─────────────────────────────
 # Corpus hash / rebuild check
 # ─────────────────────────────
@@ -97,13 +104,11 @@ def _corpus_hash() -> str:
                 h.update(f.read())
     return h.hexdigest()
 
-
 def _model_is_fresh() -> bool:
     if not os.path.exists(MODEL_PATH) or not os.path.exists(HASH_PATH):
         return False
     with open(HASH_PATH) as f:
         return f.read().strip() == _corpus_hash()
-
 
 # ─────────────────────────────
 # Generate synthetic sentences
@@ -111,13 +116,12 @@ def _model_is_fresh() -> bool:
 def make_seed_sentences(n_sentences: int = 500) -> str:
     sentences = []
     for _ in range(n_sentences):
-        adj   = random.choice(adjectives)
-        noun  = random.choice(nouns)
-        verb  = random.choice(verbs)
+        adj = random.choice(adjectives)
+        noun = random.choice(nouns)
+        verb = random.choice(verbs)
         twist = random.choice(twists)
         sentences.append(f"A {adj} {noun} that {verb} {twist}.")
     return "\n".join(sentences)
-
 
 def make_short_seed_sentences(n_sentences: int = 500) -> str:
     sentences = []
@@ -126,7 +130,6 @@ def make_short_seed_sentences(n_sentences: int = 500) -> str:
         verb = random.choice(verbs)
         sentences.append(f"A {noun} that {verb}.")
     return "\n".join(sentences)
-
 
 # ─────────────────────────────
 # Build model
@@ -151,7 +154,6 @@ def build_models():
     print("[build_models] Done")
     return combined
 
-
 # ─────────────────────────────
 # Load or build
 # ─────────────────────────────
@@ -161,23 +163,21 @@ if _model_is_fresh():
 else:
     model = build_models()
 
-# Thread-local model access guard (markovify reads are safe, but guard chain state)
 _model_lock = threading.Lock()
 
 # ─────────────────────────────
-# Verbatim corpus lines (as list for rapidfuzz)
+# Verbatim corpus lines
 # ─────────────────────────────
 _CORPUS_LINES: set = set()
-_CORPUS_LINES_LIST: list = []       # rapidfuzz needs a sequence for score_cutoff early-exit
+_CORPUS_LINES_LIST: list = []
 
 if os.path.exists(SEED_PATH):
     with open(SEED_PATH, "r", encoding="utf-8") as f:
         for _line in f:
-            _stripped = _line.strip().rstrip('.!?').lower()
+            _stripped = _line.strip().rstrip(".!?").lower()
             if len(_stripped) > 20:
                 _CORPUS_LINES.add(_stripped)
     _CORPUS_LINES_LIST = list(_CORPUS_LINES)
-
 
 # ─────────────────────────────
 # POS helpers
@@ -191,7 +191,6 @@ def _pos_tags(sentence: str):
         return pos_tag(word_tokenize(sentence))
     except Exception:
         return []
-
 
 def _pos_validate(sentence: str) -> tuple[bool, float]:
     if not _POS_AVAILABLE:
@@ -240,7 +239,6 @@ def _pos_validate(sentence: str) -> tuple[bool, float]:
 
     return True, grammar_score
 
-
 def _pos_score_word(word: str) -> str:
     """Return the dominant POS tag for a single word (for seed-word selection)."""
     if not _POS_AVAILABLE:
@@ -248,34 +246,31 @@ def _pos_score_word(word: str) -> str:
     tags = _pos_tags(word)
     return tags[0][1] if tags else "NN"
 
-
 # ─────────────────────────────
-# Candidate filter using RapidFuzz (with score_cutoff for speed)
+# Candidate filter using RapidFuzz
 # ─────────────────────────────
 def rapidfuzz_filter(candidates: list[str], threshold: int = 70) -> list[str]:
     """
     Reject candidates whose similarity to any corpus line meets or exceeds
-    `threshold`.  Uses score_cutoff so rapidfuzz can exit early per candidate.
+    `threshold`. Uses score_cutoff so rapidfuzz can exit early per candidate.
     """
     if not _CORPUS_LINES_LIST:
         return candidates
 
     filtered = []
     for s in candidates:
-        normalized = s.strip().rstrip('.!?').lower()
+        normalized = s.strip().rstrip(".!?").lower()
         if normalized in _CORPUS_LINES:
             continue
-        # score_cutoff makes extractOne return None when no match reaches threshold
         match = process.extractOne(
             normalized,
             _CORPUS_LINES_LIST,
             scorer=fuzz.ratio,
             score_cutoff=threshold,
         )
-        if match is None:       # nothing similar enough → keep
+        if match is None:
             filtered.append(s)
     return filtered
-
 
 # ─────────────────────────────
 # Enhanced candidate filter (grammar + structure)
@@ -290,38 +285,36 @@ def good_enhanced(s: str) -> tuple[bool, str | None]:
     if len(set(words)) < len(words) * 0.75:
         return False, None
 
-    first_word = words[0].lower().rstrip('.,;:')
+    first_word = words[0].lower().rstrip(".,;:")
     if first_word in _FRAGMENT_OPENERS:
         return False, None
 
-    normalized = s.strip().rstrip('.!?').lower()
+    normalized = s.strip().rstrip(".!?").lower()
     if normalized in _CORPUS_LINES:
         return False, None
 
-    # POS hard structural check (fail fast before string ops)
     pos_ok, _ = _pos_validate(s)
     if not pos_ok:
         return False, None
 
     s_fixed = s[0].upper() + s[1:]
     if not _RE_TRAILING_PUNC.search(s_fixed.rstrip()):
-        s_fixed += '.'
+        s_fixed += "."
 
     return True, s_fixed
 
-
 # ─────────────────────────────
-# Scoring function (now includes POS grammar bonus)
+# Scoring function
 # ─────────────────────────────
 def _score(s: str, seed_words: set, target_noun: str) -> float:
     s_lower = s.lower()
-    wds     = s_lower.split()
-    n       = len(wds)
+    wds = s_lower.split()
+    n = len(wds)
 
-    seed_score    = len(set(wds) & seed_words) * 2.0
+    seed_score = len(set(wds) & seed_words) * 2.0
     content_words = [w for w in wds if w not in _STOPWORDS]
-    richness      = len(set(content_words)) / max(len(content_words), 1)
-    noun_bonus    = 3.0 if target_noun and target_noun in s_lower else -2.0
+    richness = len(set(content_words)) / max(len(content_words), 1)
+    noun_bonus = 3.0 if target_noun and target_noun in s_lower else -2.0
     length_penalty = 1.0 / (1.0 + abs(n - 10) * 0.4)
 
     generic_openers = {"a ", "the ", "it ", "this ", "that "}
@@ -329,7 +322,6 @@ def _score(s: str, seed_words: set, target_noun: str) -> float:
     if s_lower.startswith("build a") or s_lower.startswith("create a"):
         opener_penalty -= 0.8
 
-    # POS grammar bonus (cached, so cheap after first call)
     _, grammar_bonus = _pos_validate(s)
 
     return (
@@ -340,7 +332,6 @@ def _score(s: str, seed_words: set, target_noun: str) -> float:
         + opener_penalty
         + grammar_bonus
     )
-
 
 # ─────────────────────────────
 # Thread-safe single-attempt generators
@@ -361,7 +352,6 @@ def _try_seeded(seed_word: str, tries: int = 8) -> list[str]:
             pass
     return results
 
-
 def _try_random(seed_words: set, tries: int = 8) -> list[str]:
     """Try to make random sentences that share at least one seed word."""
     results = []
@@ -376,9 +366,8 @@ def _try_random(seed_words: set, tries: int = 8) -> list[str]:
             pass
     return results
 
-
 # ─────────────────────────────
-# Main generator — parallelised candidate collection
+# Main generator
 # ─────────────────────────────
 def generate_best(
     seed: str,
@@ -388,61 +377,184 @@ def generate_best(
     workers: int = 4,
 ) -> str:
     candidates: list[str] = []
-    seed_words    = set(seed.lower().split())
+    seed_words = set(seed.lower().split())
     words_priority = [w for w in (noun + " " + adj).lower().split() if len(w) > 3]
-    target_noun   = noun.lower()
+    target_noun = noun.lower()
 
-    # ── Phase 1: seeded candidates in parallel ──────────────────────────────
+    # Phase 1: seeded candidates in parallel
     seeded_words = words_priority[:5] or list(seed_words)[:5]
     with ThreadPoolExecutor(max_workers=min(workers, len(seeded_words) or 1)) as ex:
-        futures = {ex.submit(_try_seeded, w, n_candidates // max(len(seeded_words), 1)): w
-                   for w in seeded_words}
+        futures = {
+            ex.submit(_try_seeded, w, n_candidates // max(len(seeded_words), 1)): w
+            for w in seeded_words
+        }
         for fut in as_completed(futures):
             candidates.extend(fut.result())
 
-    # ── Phase 2: random fill in parallel ────────────────────────────────────
-    needed        = max(30 - len(candidates), 0)
-    random_budget = needed + 10        # slight over-request to compensate for filtering
-    random_batch  = max(random_budget // workers, 4)
+    # Phase 2: random fill in parallel
+    needed = max(30 - len(candidates), 0)
+    random_budget = needed + 10
+    random_batch = max(random_budget // workers, 4)
 
     with ThreadPoolExecutor(max_workers=workers) as ex:
         futures = [ex.submit(_try_random, seed_words, random_batch) for _ in range(workers)]
         for fut in as_completed(futures):
             candidates.extend(fut.result())
 
-    # ── Phase 3: rapidfuzz de-duplication ───────────────────────────────────
+    # Phase 3: RapidFuzz de-duplication
     candidates = rapidfuzz_filter(candidates, threshold=70)
 
-    # ── Phase 4: score and select ────────────────────────────────────────────
+    # Phase 4: score and select
     if candidates:
         best = max(candidates, key=lambda s: _score(s, seed_words, target_noun))
         best = _RE_MULTI_SPACE.sub(" ", best)
         best = _RE_REPEATED_WORD.sub(r"\1", best)
-        return best.strip() if _RE_TRAILING_PUNC.search(best[-1]) else best.strip() + "."
+        best = best.strip()
+        return best if _RE_TRAILING_PUNC.search(best) else best + "."
 
-    # ── Fallback ─────────────────────────────────────────────────────────────
+    # Fallback
     seed_parts = seed.split(None, 3)
     if len(seed_parts) == 4:
         _, noun_f, verb_f, twist_f = seed_parts
         return f"A {noun_f} that {verb_f} {twist_f}."
     return f"A tool that {seed.strip()}."
 
+# ─────────────────────────────
+# Replace repeated start with pronoun
+# ─────────────────────────────
+def replace_till_verb(sent1: str, sent2: str, pronoun: str = "It") -> str:
+    """
+    Replace the opening noun-phrase-like part of sent2 with a pronoun.
+    Returns the modified sent2 only.
+    """
+    print("\n--- CALL ---")
+    print("sent1:", sent1)
+    print("sent2:", sent2)
+
+    words2 = sent2.split()
+    words1 = sent1.split()
+    print("words2:", words2)
+
+    if not words2:
+        print("empty sent2")
+        return sent2
+
+    # Normalize for prefix comparison
+    def _norm(w: str) -> str:
+        return w.strip(string.punctuation).lower()
+
+    prefix_len = 0
+    for a, b in zip(words1, words2):
+        if _norm(a) != _norm(b):
+            break
+        prefix_len += 1
+
+    print("shared prefix len:", prefix_len)
+
+    tags = []
+    if _POS_AVAILABLE:
+        from nltk import pos_tag
+        try:
+            tags = pos_tag(words2)
+        except Exception as e:
+            print("POS error:", e)
+            tags = []
+
+    if tags:
+        print("TAGS:")
+        for w, t in tags:
+            print(f"{w:15} {t}")
+
+    NOUNS = {"NN", "NNS", "NNP", "NNPS"}
+    ADJ = {"JJ", "JJR", "JJS"}
+    DET = {"DT", "PRP$", "POS"}
+    CONNECT = {"IN", "WDT", "WP", "WRB", "TO", "CC"}
+    PRON = {"PRP"}
+    VERBS = {"VB", "VBD", "VBG", "VBN", "VBP", "VBZ", "MD"}
+    ADV = {"RB", "RBR", "RBS"}
+    CONNECT_WORDS = {
+        "that", "which", "who", "whom", "where", "when", "why", "how",
+        "because", "since", "although", "unless", "until", "while", "if", "as", "before", "after"
+    }
+
+    cut_index = 0
+    if tags:
+        print("\nScanning tags...")
+
+        seen_nounish = False
+        for i, (word, tag) in enumerate(tags):
+            word_norm = word.lower().strip(string.punctuation)
+            print(f"i={i}  word={word}  tag={tag}")
+
+            if tag in NOUNS or tag in ADJ or tag in DET or tag in ADV or tag in PRON:
+                seen_nounish = True
+                print("allowed noun-phrase tag")
+                continue
+
+            # If we hit a connector after some noun phrase, cut *after* it
+            if word_norm in CONNECT_WORDS or tag in CONNECT:
+                print("connector found")
+                if seen_nounish or i >= 2:
+                    cut_index = i + 1
+                    break
+                continue
+
+            # First real verb after some opener -> cut here
+            if tag in VERBS:
+                print("FOUND VERB at", i)
+                if seen_nounish or prefix_len > 0 or i >= 2:
+                    cut_index = i
+                break
+
+            # Anything else stops replacement
+            print("NOT ALLOWED → stop replacement")
+            cut_index = 0
+            break
+
+    # Fallback if POS didn't help: use common prefix if it looks meaningful
+    if cut_index == 0 and prefix_len >= 2 and prefix_len < len(words2):
+        cut_index = prefix_len
+
+    print("cut_index =", cut_index)
+
+    if cut_index > 0 and cut_index < len(words2):
+        remainder = words2[cut_index:]
+        print("remainder:", remainder)
+        replaced = pronoun.capitalize() + " " + " ".join(remainder)
+        print("RESULT:", replaced)
+        return replaced
+
+    print("No replacement")
+    return sent2
 
 # ─────────────────────────────
 # Public helpers
 # ─────────────────────────────
 def generate_coding_idea():
-    adj   = random.choice(adjectives) if random.random() < 0.9 else ""
-    noun  = random.choice(nouns)
-    verb  = random.choice(verbs)
+    adj = random.choice(adjectives) if random.random() < 0.9 else ""
+    noun = random.choice(nouns)
+    verb = random.choice(verbs)
     twist = random.choice(twists) if random.random() < 0.9 else ""
     return adj, noun, verb, twist
 
-
 def get_description(adj, noun, verb, twist):
     seed = f"{adj} {noun} {verb} {twist}".strip()
-    return generate_best(seed, noun=noun, adj=adj) + " " + generate_best(seed, noun=noun, adj=adj)
+    sent1 = generate_best(seed, noun=noun, adj=adj)
 
+    # Make sure sent2 is not identical or too similar to sent1
+    sent2 = ""
+    for _ in range(6):
+        candidate = generate_best(seed, noun=noun, adj=adj)
+        if fuzz.ratio(sent1.lower(), candidate.lower()) < 88:
+            sent2 = candidate
+            break
+        sent2 = candidate
+
+    # Replace repeated opening phrase in sent2
+    sent2 = replace_till_verb(sent1, sent2, pronoun="It")
+
+    # Return both sentences
+    return sent1 + " " + sent2
 
 # ─────────────────────────────
 # Example usage
