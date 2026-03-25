@@ -148,7 +148,7 @@ def build_models():
     model2 = markovify.NewlineText(clean(seed2_text), state_size=3)
     seed3_text = make_short_seed_sentences(4000)
     model3 = markovify.NewlineText(clean(seed3_text), state_size=3)
-    combined = markovify.combine([model1, model2, model3], [0.70, 0.10, 0.20])
+    combined = markovify.combine([model1, model2, model3], [0.90, 0.05, 0.05])
 
     with open(MODEL_PATH, "w", encoding="utf-8") as f:
         f.write(combined.to_json())
@@ -332,7 +332,7 @@ def _score(
     content_words = [w.strip(string.punctuation) for w in wds if w.strip(string.punctuation) not in _STOPWORDS]
     richness = len(set(content_words)) / max(len(content_words), 1)
     noun_bonus = 3.0 if target_noun and target_noun in s_lower else -2.0
-    length_penalty = 1.0 / (1.0 + abs(n - 10) * 0.4)
+    length_penalty = 1.0 / (1.0 + abs(n - 10) * 0.1)
 
     generic_openers = {"a ", "the ", "it ", "this ", "that "}
     opener_penalty = -0.2 if any(s_lower.startswith(o) for o in generic_openers) else 0.0
@@ -449,141 +449,98 @@ def generate_best(
 # ─────────────────────────────
 def replace_till_verb(sent1: str, sent2: str, pronoun: str = "It") -> str:
     """
-    Replace the opening noun-phrase-like part of sent2 with a pronoun.
-    Keeps POS tagging, but avoids cutting on gerunds/participles used as modifiers.
-    Also uses a verb lexicon to catch mis-tagged verbs.
+    Replace the opening noun phrase in sent2 with a pronoun,
+    and if the first real verb after the cut is present continuous (VBG),
+    insert 'will be' after the pronoun.
     """
-    print("\n--- CALL ---")
-    print("sent1:", sent1)
-    print("sent2:", sent2)
-
-    words2 = sent2.split()
-    words1 = sent1.split()
-    print("words2:", words2)
-
-    if not words2:
-        print("empty sent2")
-        return sent2
 
     def _norm(w: str) -> str:
         return w.strip(string.punctuation).lower()
 
-    # Shared prefix length
+    words2 = sent2.split()
+    words1 = sent1.split()
+
+    # find shared prefix
     prefix_len = 0
     for a, b in zip(words1, words2):
         if _norm(a) != _norm(b):
             break
         prefix_len += 1
-    print("shared prefix len:", prefix_len)
 
+    # POS tag the whole sentence2
     tags = []
     if _POS_AVAILABLE:
-        from nltk import pos_tag
         try:
-            tags = pos_tag(words2)
-        except Exception as e:
-            print("POS error:", e)
+            tags = pos_tag(word_tokenize(sent2))
+        except Exception:
             tags = []
 
-    if tags:
-        print("TAGS:")
-        for w, t in tags:
-            print(f"{w:15} {t}")
-
-    # POS sets
+    # sets for checking
     NOUNS = {"NN", "NNS", "NNP", "NNPS"}
-    ADJ = {"JJ", "JJR", "JJS"}
-    DET = {"DT", "PRP$", "POS"}
-    CONNECT = {"IN", "WDT", "WP", "WRB", "TO", "CC"}
-    PRON = {"PRP"}
-    VERBS = {"VB", "VBD", "VBG", "VBN", "VBP", "VBZ", "MD"}
-    ADV = {"RB", "RBR", "RBS"}
-
+    VERBS_FINITE = {"VB", "VBD", "VBP", "VBZ"}  # finite verbs only
+    PARTICIPLES = {"VBG", "VBN"}                # non‑finite participles
     CONNECT_WORDS = {
-        "that", "which", "who", "whom", "where", "when", "why", "how",
-        "because", "since", "although", "unless", "until", "while", "if",
-        "as", "before", "after"
+        "that", "which", "who", "whom", "where", "when",
+        "because", "since", "although", "unless", "until",
+        "while", "if", "as", "before", "after"
     }
 
-    # Override lexicons (replace with your actual nouns and verbs lists)
-    _NOUN_LEXICON = {n.lower() for n in nouns}
-    _NOUN_LEXICON.add("suite")  # special cases
-    _VERB_LEXICON = {v.lower() for v in verbs}
-
-    def is_nounish_token(word: str, tag: str) -> bool:
-        w = _norm(word)
-        if tag in NOUNS or tag in ADJ or tag in DET or tag in ADV or tag in PRON:
-            return True
-        if w in _NOUN_LEXICON:
-            return True
-        return False
-
+    # find cut index
     cut_index = 0
     if tags:
-        print("\nScanning tags...")
         seen_nounish = False
-
         for i, (word, tag) in enumerate(tags):
-            word_norm = _norm(word)
-            next_tag = tags[i + 1][1] if i + 1 < len(tags) else ""
-            next_word = _norm(tags[i + 1][0]) if i + 1 < len(tags) else ""
+            wnorm = _norm(word)
 
-            print(f"i={i}  word={word}  tag={tag}")
-
-            # Normal noun-phrase material
-            if is_nounish_token(word, tag):
+            # part of a noun phrase (keep scanning)
+            if tag in NOUNS or tag.startswith("JJ") or tag.startswith("RB") or tag in {"DT", "PRP$"}:
                 seen_nounish = True
-                print("allowed noun-phrase tag")
                 continue
 
-            # Connectors
-            if word_norm in CONNECT_WORDS or tag in CONNECT:
-                print("connector found")
+            # connectors like relative pronouns
+            if tag == "IN" or wnorm in CONNECT_WORDS:
                 if seen_nounish or i >= 2:
                     cut_index = i + 1
                     break
                 continue
 
-            # Participles used as adjectives
-            if tag in {"VBG", "VBN"} and (
-                next_tag in NOUNS or next_tag in ADJ or next_word in _NOUN_LEXICON
-            ):
-                print("participial modifier before noun → keep scanning")
-                seen_nounish = True
-                continue
-
-            # Real verb boundary
-            if tag in VERBS or word_norm in _VERB_LEXICON:
-                if word_norm in _NOUN_LEXICON:
-                    print("verb-tagged but known noun → keep scanning")
-                    seen_nounish = True
-                    continue
-
+            # found a **finite verb** → boundary
+            if tag in VERBS_FINITE:
                 if seen_nounish or prefix_len > 0 or i >= 2:
-                    print("FOUND VERB at", i)
                     cut_index = i
                     break
-
-                print("leading verb-like token ignored")
                 continue
 
-            print("NOT ALLOWED → stop replacement")
+            # if participle after a real verb (e.g., 'is running'), skip participle
+            if tag == "VBG" or tag == "VBN":
+                # but don’t treat it as the cut on its own
+                continue
+
+            # else, stop replacement but don’t cut yet
             cut_index = 0
             break
 
+    # fallback: prefix heuristic
     if cut_index == 0 and prefix_len >= 2 and prefix_len < len(words2):
         cut_index = prefix_len
 
-    print("cut_index =", cut_index)
-
-    if cut_index > 0 and cut_index < len(words2):
+    # build replacement
+    if 0 < cut_index < len(words2):
         remainder = words2[cut_index:]
-        print("remainder:", remainder)
-        replaced = pronoun.capitalize() + " " + " ".join(remainder)
-        print("RESULT:", replaced)
-        return replaced
 
-    print("No replacement")
+        # check if the first real verb is present continuous (VBG)
+        inject = ""
+        if tags and cut_index < len(tags):
+            first_tag = tags[cut_index][1]
+            if first_tag == "VBG":
+                inject = "will be"
+
+        if inject:
+            return f"{pronoun} {inject} " + " ".join(remainder)
+        else:
+            return f"{pronoun} " + " ".join(remainder)
+
+    # if no replacement was found
     return sent2
 
 # ─────────────────────────────
