@@ -56,6 +56,8 @@ MODEL_PATH = os.path.join(BASE_DIR, "model.json")
 HASH_PATH  = os.path.join(BASE_DIR, "model.hash")
 SEED_PATH  = os.path.join(BASE_DIR, "seed_text.py")
 
+_STARTWORDS = frozenset("a the to until ")
+
 _STOPWORDS = frozenset(
     "a an the and or but in on at to for of with that this is are was were "
     "it its they them their be been being have has had do does did will would "

@@ -488,6 +488,12 @@ We generate hoping something in the output is worth keeping. Something worth rea
 
 We generate until finally inevitably we reach the end.
 
+Until today we were lost until yesterday we were found.
+
+Until it was done we were worried about our death.
+
+Until it was done we were worried about failure.
+
 Language server protocol support integrates seamlessly with multiple selections to enhance developer productivity.
 
 The language server provides real‑time diagnostics and intelligent completions across your entire codebase.
